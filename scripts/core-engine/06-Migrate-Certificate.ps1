@@ -4,28 +4,23 @@
   IIS PIVOT -- Piece #7 (certificate / HTTPS binding migration)
 
   WHAT IT DOES: reads the HTTPS binding and certificate currently on
-  PivotTest-Alpha (created back in Setup-PracticeServer.ps1), and
-  applies that SAME certificate to a new site, PivotTest-Delta-Clone
-  (created in the previous piece) -- adding an HTTPS binding to it on
-  a new port. This proves IIS Pivot can carry over not just site
-  config and content, but the certificate binding itself, which the
-  design doc specifically flags as one of the gaps plain Web Deploy
-  doesn't handle well.
+  PivotTest-Alpha, and applies that SAME certificate to
+  PivotTest-Delta-Clone -- adding an HTTPS binding to it on a new port.
 
   SOURCE: PivotTest-Alpha's HTTPS binding + certificate (port 8444)
   TARGET: PivotTest-Delta-Clone gets a new HTTPS binding (port 8446)
-          using the SAME certificate (by thumbprint), not a new one.
 
-  SAFE / REVERSIBLE: adds one binding to an existing test site. No
-  certificate is deleted or modified -- only read and re-applied.
-  Removal instructions are at the bottom of this file.
+  BUG FIX (found via smoke test, script 15): the original version of
+  this script added the HTTPS binding but never opened a matching
+  firewall rule for the new port. The AddTargetBinding step now opens
+  the firewall rule too, matching the pattern 05-Clone-Site.ps1 already
+  used correctly for HTTP ports.
 
   RUN THIS ON: the practice server, as Administrator.
 
   WHAT TO REPORT BACK: the full console output, AND confirm whether
-  https://localhost:8446 loads (your browser will show a certificate
-  warning -- that's expected and fine, since it's a self-signed test
-  certificate. Click through/accept it to confirm the page loads).
+  https://localhost:8446 loads (certificate warning expected, click
+  through/accept it).
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -42,10 +37,6 @@ $targetHttpsPort = 8446
 $checkpointDir  = 'C:\PivotCheckpoints'
 New-Item -Path $checkpointDir -ItemType Directory -Force | Out-Null
 $checkpointPath = Join-Path $checkpointDir "checkpoint-migrate-cert-$(Get-Date -Format 'yyyyMMdd-HHmmss').json"
-
-# ---------------------------------------------------------------------
-# Checkpoint engine (same mechanism as previous pieces)
-# ---------------------------------------------------------------------
 
 function New-Checkpoint {
     param([string[]]$StepNames)
@@ -91,9 +82,7 @@ function Invoke-CheckpointedStep {
     }
 }
 
-# ---------------------------------------------------------------------
 Write-Section "Setup"
-# ---------------------------------------------------------------------
 Import-Module WebAdministration -ErrorAction Stop
 $stepNames = @('ReadSourceCertificate', 'CheckTargetPrerequisites', 'AddTargetBinding', 'ApplyCertificate', 'VerifyHttpsResponds')
 New-Checkpoint -StepNames $stepNames
@@ -103,16 +92,14 @@ Write-Host "  Source: $sourceSiteName (HTTPS cert)  ->  Target: $targetSiteName 
 $certThumbprint = $null
 $certStoreName  = $null
 
-# ---------------------------------------------------------------------
 Write-Section "Running steps"
-# ---------------------------------------------------------------------
 
 Invoke-CheckpointedStep -StepName 'ReadSourceCertificate' -Action {
     $site = Get-Website -Name $sourceSiteName -ErrorAction Stop
     $httpsBinding = $site.Bindings.Collection | Where-Object { $_.Protocol -eq 'https' } | Select-Object -First 1
 
     if (-not $httpsBinding) {
-        throw "'$sourceSiteName' has no HTTPS binding -- nothing to migrate. Check the practice server setup script ran correctly."
+        throw "'$sourceSiteName' has no HTTPS binding -- nothing to migrate."
     }
     if (-not $httpsBinding.CertificateHash) {
         throw "'$sourceSiteName' has an HTTPS binding but no certificate attached -- nothing to migrate."
@@ -124,13 +111,9 @@ Invoke-CheckpointedStep -StepName 'ReadSourceCertificate' -Action {
     Write-Host "    Found certificate thumbprint: $($script:certThumbprint)"
     Write-Host "    Certificate store: $($script:certStoreName)"
 
-    # Confirm the certificate actually exists in the local cert store --
-    # the binding could theoretically reference a thumbprint that's no
-    # longer present, which would be a real-world migration gotcha worth
-    # catching here rather than failing later with a confusing error.
     $certPath = "Cert:\LocalMachine\$($script:certStoreName)\$($script:certThumbprint)"
     if (-not (Test-Path $certPath)) {
-        throw "Certificate with thumbprint $($script:certThumbprint) not found in Cert:\LocalMachine\$($script:certStoreName). The binding references a cert that isn't actually installed."
+        throw "Certificate with thumbprint $($script:certThumbprint) not found."
     }
 }
 
@@ -146,6 +129,9 @@ Invoke-CheckpointedStep -StepName 'CheckTargetPrerequisites' -Action {
 
 Invoke-CheckpointedStep -StepName 'AddTargetBinding' -Action {
     New-WebBinding -Name $targetSiteName -Protocol https -Port $targetHttpsPort -IPAddress '*'
+
+    New-NetFirewallRule -DisplayName "PivotTest-Port-$targetHttpsPort" -Direction Inbound -Protocol TCP -LocalPort $targetHttpsPort -Action Allow -ErrorAction SilentlyContinue | Out-Null
+    Write-Host "    Opened firewall rule for port $targetHttpsPort"
 }
 
 Invoke-CheckpointedStep -StepName 'ApplyCertificate' -Action {
@@ -156,15 +142,7 @@ Invoke-CheckpointedStep -StepName 'ApplyCertificate' -Action {
 
 Invoke-CheckpointedStep -StepName 'VerifyHttpsResponds' -Action {
     Start-Sleep -Seconds 2
-
-    # Same root cause as the earlier PowerShell 7 install failure: this
-    # server's .NET Framework defaults to older TLS versions, which
-    # breaks the HTTPS handshake unless TLS 1.2 is explicitly enabled
-    # for this session.
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-
-    # Self-signed test cert won't be trusted by default, so certificate
-    # validation needs to be temporarily bypassed for this check only.
     $originalCallback = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
     [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
     try {
@@ -177,19 +155,19 @@ Invoke-CheckpointedStep -StepName 'VerifyHttpsResponds' -Action {
     }
 }
 
-# ---------------------------------------------------------------------
 Write-Section "Final checkpoint state"
-# ---------------------------------------------------------------------
 $final = Get-Content $checkpointPath -Raw | ConvertFrom-Json
 $final.steps.PSObject.Properties | ForEach-Object {
     Write-Host "  $($_.Name): $($_.Value.status)"
 }
 
 Write-Section "Summary"
-Write-Host "  Certificate migrated from '$sourceSiteName' to '$targetSiteName' (port $targetHttpsPort), verified responding over HTTPS." -ForegroundColor Green
+Write-Host "  Certificate migrated from '$sourceSiteName' to '$targetSiteName' (port $targetHttpsPort), verified responding over HTTPS (localhost)." -ForegroundColor Green
 Write-Host "  Checkpoint file: $checkpointPath"
 Write-Host ""
 Write-Host "  TO UNDO LATER, run:" -ForegroundColor DarkGray
 Write-Host "    Remove-WebBinding -Name '$targetSiteName' -Protocol https -Port $targetHttpsPort" -ForegroundColor DarkGray
+Write-Host "    Remove-NetFirewallRule -DisplayName 'PivotTest-Port-$targetHttpsPort'" -ForegroundColor DarkGray
 Write-Host ""
-Write-Host "  Send back this full console output, and confirm https://localhost:$targetHttpsPort loads (a certificate warning in your browser is expected -- click through/accept it, since this is a self-signed test cert)."
+Write-Host "  Send back this full console output, and confirm https://localhost:$targetHttpsPort loads."
+Write-Host "  For a real network-reachability check, also run 15-Test-SmokeTestSuite.ps1 from your laptop."
