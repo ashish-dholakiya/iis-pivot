@@ -1,0 +1,15 @@
+# Credentials, secrets, connection strings
+*.credential
+*secret*
+*Secret*
+
+# Checkpoint/export/manifest JSON files - may contain server details, site configs, paths
+*.checkpoint.json
+*-export.json
+*-manifest.json
+checkpoints/
+exports/
+
+# Local environment specifics
+*.pfx
+*.cer
