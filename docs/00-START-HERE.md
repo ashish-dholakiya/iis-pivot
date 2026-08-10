@@ -6,7 +6,7 @@
 
 ## One-paragraph status
 
-IIS Pivot is a custom PowerShell-based tool for migrating IIS-hosted websites between Windows servers, with checkpointed/resumable steps, remote execution, secure credential handling, and cloud storage backup. **The core engine primitives are built and proven** — 12 separate capabilities tested end-to-end on a real Windows Server 2016 practice VM, including the hardest parts (remote execution, failure recovery, secure credentials, Azure Blob storage). This is genuine progress, but it is **not the same as "Phase 1 complete."** A private design/scope document (author's own IP, kept out of this repo entirely — see "Read next" below) defines additional Phase 1 requirements not yet built. The project is paused at a natural milestone: engine primitives proven, decision pending on whether to finish the remaining Phase 1 scope before considering Phase 2 (security hardening).
+IIS Pivot is a custom PowerShell-based tool for migrating IIS-hosted websites between Windows servers, with checkpointed/resumable steps, remote execution, secure credential handling, and cloud storage backup. **All engine-side Phase 1 work is now built and proven** — remote execution, checkpointing, secure credentials, Azure Blob storage, a pluggable storage abstraction layer, manifest version checking, a per-site smoke test (which caught and led to fixing a real HTTPS/firewall bug — see the practice-environment fix history), and a storage/client-data sizing assessment. The one remaining Phase 1 item is the Pode web console — not yet built, but fully scoped with an approved sprint plan (private document — see "Read next" below) and a visual preview in `IIS-Pivot-Console-User-Guide.pdf`. The project's next concrete step is Sprint 0 of the console plan (confirming the jumpbox is Pode-ready), whenever that work resumes. Only after the console is built does Phase 1 close out completely, ahead of Phase 2 (security hardening).
 
 ## Project context
 
@@ -18,6 +18,7 @@ The person driving this project is the **product owner**, not a developer — no
 - **`IIS-Pivot-Technical-Reference.md`** — what's been built so far, what's proven, every script and what it does, naming conventions, known environment identifiers (IPs, secret names, etc.)
 - **`IIS-Pivot-Full-Configuration-Guide.md`** — how the practice environment was set up from scratch, and every gotcha hit along the way (useful if the environment needs to be rebuilt, or a similar issue resurfaces)
 - **`Practice-Server-Setup-Guide.md`** — companion doc for `Setup-PracticeServer.ps1`; explains what the seeded test-fixture VM contains and why (it is not part of IIS Pivot itself — it's the disposable stand-in for a real client server)
+- **`IIS-Pivot-Console-User-Guide.pdf`** — visual walkthrough of the planned console GUI, written for a non-technical reader. Describes the *planned* design (mockups from the sprint plan), not built software yet — the console itself doesn't exist as working code. Good for previewing intent, not for troubleshooting something that isn't there yet.
 
 ## Immediate practical notes
 
