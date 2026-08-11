@@ -31,12 +31,12 @@ function Get-AllMigrations {
     return $migrations
 }
 function New-MigrationRecord {
-    param([string]$ClientName, [string]$SourceServer, [string]$TargetServer)
+    param([string]$MigrationName, [string]$ClientName, [string]$SourceServer, [string]$TargetServer)
     $cfg = Get-AppConfig
     $dir = if ($cfg -and $cfg.migrationsPath) { $cfg.migrationsPath } else { "C:\PivotMigrations" }
     if (-not (Test-Path $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
     $id = [System.Guid]::NewGuid().ToString("N").Substring(0,12)
-    [ordered]@{ id=$id; clientName=$ClientName; sourceServer=$SourceServer; targetServer=$TargetServer; status="NotStarted"; createdAt=(Get-Date).ToString("o"); updatedAt=(Get-Date).ToString("o"); createdBy="pivot"; steps=@{} } | ConvertTo-Json -Depth 6 | Set-Content "$dir\migration-$id.json" -Encoding UTF8
+    [ordered]@{ id=$id; migrationName=$migrationName; clientName=$clientName; sourceServer=$sourceServer; targetServer=$TargetServer; status="NotStarted"; createdAt=(Get-Date).ToString("o"); updatedAt=(Get-Date).ToString("o"); createdBy="pivot"; steps=@{} } | ConvertTo-Json -Depth 6 | Set-Content "$dir\migration-$id.json" -Encoding UTF8
 }
 function Get-IISPivotHtml {
     param([string]$Title, [string]$Body, [bool]$Authenticated = $false)
@@ -130,7 +130,7 @@ Start-PodeServer -Threads 2 {
                     default      { "badge-gray" }
                 }
                 $updated = try { ([datetime]$m.updatedAt).ToString("dd-MM-yyyy HH:mm") } catch { "—" }
-                $tableRows += "<tr><td><strong>$($m.clientName)</strong></td><td style='color:#5c6b78;'>$($m.sourceServer)</td><td style='color:#5c6b78;'>$($m.targetServer)</td><td><span class='badge $badgeClass'>$($m.status)</span></td><td style='color:#7a8794;font-size:13px;'>$updated</td></tr>"
+                $tableRows += "<tr><td><strong>$($m.migrationName)</strong><div style='font-size:12px;color:#7a8794;margin-top:2px;'>$($m.clientName)</div></td><td style='color:#5c6b78;'>$($m.sourceServer)</td><td style='color:#5c6b78;'>$($m.targetServer)</td><td><span class='badge $badgeClass'>$($m.status)</span></td><td style='color:#7a8794;font-size:13px;'>$updated</td></tr>"
             }
         }
         $storageInfo = if ($cfg) { "Migrations stored at: <strong>$($cfg.migrationsPath)</strong>" } else { "" }
@@ -141,13 +141,14 @@ Start-PodeServer -Threads 2 {
     Add-PodeRoute -Method Get -Path "/new-migration" -ScriptBlock {
         if (-not $WebEvent.Session.Data.Authenticated) { Move-PodeResponseUrl -Url "/login"; return }
         $WebEvent.Session.Data.NewMigration = @{}
-        $body = "<h1>New Migration</h1><div class='wizard-steps'><div class='wizard-step active'>1. Target connection</div><div class='wizard-step'>2. Storage config</div><div class='wizard-step'>3. Assessment</div></div><div class='card'><h2>Connect to the target server</h2><p style='color:#5c6b78;font-size:13.5px;margin:0 0 16px 0;'>The target is the server you are migrating TO. Nothing will be changed on either server yet.</p><form method='POST' action='/new-migration/test-connection'><label>Client name</label><input type='text' name='clientName' placeholder='e.g. Acme Corp' required><label>Source server (migrating FROM)</label><input type='text' name='sourceServer' placeholder='e.g. 192.168.1.10 or WIN-PROD-01' required><label>Target server IP or hostname (migrating TO)</label><input type='text' name='targetServer' placeholder='e.g. 192.168.1.20 or WIN-NEW-01' required><label>Administrator username</label><input type='text' name='adminUser' placeholder='e.g. Administrator' required><label>Administrator password</label><input type='password' name='adminPass' required><div style='margin-top:20px;display:flex;gap:10px;'><button type='submit' class='btn btn-primary'>Test connection</button><a href='/dashboard' class='btn btn-outline'>Cancel</a></div></form></div>"
+        $body = "<h1>New Migration</h1><div class='wizard-steps'><div class='wizard-step active'>1. Target connection</div><div class='wizard-step'>2. Storage config</div><div class='wizard-step'>3. Assessment</div></div><div class='card'><h2>Connect to the target server</h2><p style='color:#5c6b78;font-size:13.5px;margin:0 0 16px 0;'>The target is the server you are migrating TO. Nothing will be changed on either server yet.</p><form method='POST' action='/new-migration/test-connection'><label>Migration name</label><input type='text' name='migrationName' placeholder='e.g. Acme Corp — Phase 1 cutover' required><label>Client name</label><input type='text' name='clientName' placeholder='e.g. Acme Corp' required><label>Source server (migrating FROM)</label><input type='text' name='sourceServer' placeholder='e.g. 192.168.1.10 or WIN-PROD-01' required><label>Target server IP or hostname (migrating TO)</label><input type='text' name='targetServer' placeholder='e.g. 192.168.1.20 or WIN-NEW-01' required><label>Administrator username</label><input type='text' name='adminUser' placeholder='e.g. Administrator' required><label>Administrator password</label><input type='password' name='adminPass' required><div style='margin-top:20px;display:flex;gap:10px;'><button type='submit' class='btn btn-primary'>Test connection</button><a href='/dashboard' class='btn btn-outline'>Cancel</a></div></form></div>"
         Write-PodeHtmlResponse -Value (Get-IISPivotHtml -Title "New Migration" -Body $body -Authenticated $true)
     }
 
     # New Migration Step 1 POST - Test Connection
     Add-PodeRoute -Method Post -Path "/new-migration/test-connection" -ScriptBlock {
         if (-not $WebEvent.Session.Data.Authenticated) { Move-PodeResponseUrl -Url "/login"; return }
+        $migrationName = $WebEvent.Data["migrationName"]
         $clientName   = $WebEvent.Data["clientName"]
         $sourceServer = $WebEvent.Data["sourceServer"]
         $targetServer = $WebEvent.Data["targetServer"]
@@ -168,7 +169,7 @@ Start-PodeServer -Threads 2 {
             $connectionDetail = $_.Exception.Message
         }
         $WebEvent.Session.Data.NewMigration = @{
-            clientName=$clientName; sourceServer=$sourceServer; targetServer=$targetServer
+            migrationName=$migrationName; clientName=$clientName; sourceServer=$sourceServer; targetServer=$targetServer
             adminUser=$adminUser; adminPass=$adminPass
             connectionResult=$connectionResult; connectionDetail=$connectionDetail
         }
@@ -178,7 +179,7 @@ Start-PodeServer -Threads 2 {
             "<div class='error-msg'><strong>Connection failed:</strong> $connectionDetail</div>"
         }
         $continueBtn = if ($connectionResult -ne "failed") { "<a href='/new-migration/storage' class='btn btn-primary'>Continue to storage config</a>" } else { "" }
-        $body = "<h1>New Migration</h1><div class='wizard-steps'><div class='wizard-step done'>1. Target connection</div><div class='wizard-step active'>2. Storage config</div><div class='wizard-step'>3. Assessment</div></div><div class='card'><h2>Connection result</h2><div style='margin-bottom:8px;'><strong>Client:</strong> $clientName</div><div style='margin-bottom:8px;'><strong>Source:</strong> $sourceServer</div><div style='margin-bottom:16px;'><strong>Target:</strong> $targetServer</div>$statusBlock<div style='margin-top:20px;display:flex;gap:10px;'>$continueBtn<a href='/new-migration' class='btn btn-outline'>Back</a></div></div>"
+        $body = "<h1>New Migration</h1><div class='wizard-steps'><div class='wizard-step done'>1. Target connection</div><div class='wizard-step active'>2. Storage config</div><div class='wizard-step'>3. Assessment</div></div><div style='margin-bottom:16px;padding:10px 14px;background:#f8fafc;border-radius:6px;border-left:3px solid #2ea3ff;font-size:15px;font-weight:600;'>$migrationName<span style='font-size:12px;font-weight:400;color:#7a8794;margin-left:8px;'>$clientName</span></div><div class='card'><h2>Connection result</h2><div style='margin-bottom:12px;padding:10px 14px;background:#f8fafc;border-radius:6px;border-left:3px solid #2ea3ff;'><strong style='font-size:16px;'></strong><div style='font-size:12px;color:#7a8794;margin-top:2px;'></div></div><div style='margin-bottom:8px;'><strong>Client:</strong> $clientName</div><div style='margin-bottom:8px;'><strong>Source:</strong> $sourceServer</div><div style='margin-bottom:16px;'><strong>Target:</strong> $targetServer</div>$statusBlock<div style='margin-top:20px;display:flex;gap:10px;'>$continueBtn<a href='/new-migration' class='btn btn-outline'>Back</a></div></div>"
         Write-PodeHtmlResponse -Value (Get-IISPivotHtml -Title "New Migration" -Body $body -Authenticated $true)
     }
     # New Migration Step 2 - Storage Config
@@ -186,7 +187,7 @@ Start-PodeServer -Threads 2 {
         if (-not $WebEvent.Session.Data.Authenticated) { Move-PodeResponseUrl -Url "/login"; return }
         $cfg = Get-AppConfig
         $migrationsPath = if ($cfg -and $cfg.migrationsPath) { $cfg.migrationsPath } else { "C:\PivotMigrations" }
-        $body = "<h1>New Migration</h1><div class='wizard-steps'><div class='wizard-step done'>1. Target connection</div><div class='wizard-step active'>2. Storage config</div><div class='wizard-step'>3. Assessment</div></div><div class='card'><h2>Storage backend</h2><p style='color:#5c6b78;font-size:13.5px;margin:0 0 16px 0;'>Where backups and migration records will be stored.</p><div class='storage-option selected'><input type='radio' checked disabled><div><strong>Local path</strong><div style='font-size:12px;color:#7a8794;margin-top:2px;'>$migrationsPath</div></div></div><div class='storage-option disabled'><input type='radio' disabled><div><strong>Azure Blob Storage</strong><span class='coming-soon'>Coming soon</span></div></div><div class='storage-option disabled'><input type='radio' disabled><div><strong>AWS S3</strong><span class='coming-soon'>Coming soon</span></div></div><div class='storage-option disabled'><input type='radio' disabled><div><strong>Network share (NAS/UNC)</strong><span class='coming-soon'>Coming soon</span></div></div><div class='success-msg' style='margin-top:16px;'>Local storage validated — path is accessible.</div><div style='margin-top:20px;display:flex;gap:10px;'><a href='/new-migration/assessment' class='btn btn-primary'>Continue to assessment</a><a href='/new-migration' class='btn btn-outline'>Back</a></div></div>"
+        $body = "<h1>New Migration</h1><div class='wizard-steps'><div class='wizard-step done'>1. Target connection</div><div class='wizard-step active'>2. Storage config</div><div class='wizard-step'>3. Assessment</div></div><div style='margin-bottom:16px;padding:10px 14px;background:#f8fafc;border-radius:6px;border-left:3px solid #2ea3ff;font-size:15px;font-weight:600;'>$($nm.migrationName)<span style='font-size:12px;font-weight:400;color:#7a8794;margin-left:8px;'>$($nm.clientName)</span></div><div class='card'><h2>Storage backend</h2><p style='color:#5c6b78;font-size:13.5px;margin:0 0 16px 0;'>Where backups and migration records will be stored.</p><div class='storage-option selected'><input type='radio' checked disabled><div><strong>Local path</strong><div style='font-size:12px;color:#7a8794;margin-top:2px;'>$migrationsPath</div></div></div><div class='storage-option disabled'><input type='radio' disabled><div><strong>Azure Blob Storage</strong><span class='coming-soon'>Coming soon</span></div></div><div class='storage-option disabled'><input type='radio' disabled><div><strong>AWS S3</strong><span class='coming-soon'>Coming soon</span></div></div><div class='storage-option disabled'><input type='radio' disabled><div><strong>Network share (NAS/UNC)</strong><span class='coming-soon'>Coming soon</span></div></div><div class='success-msg' style='margin-top:16px;'>Local storage validated — path is accessible.</div><div style='margin-top:20px;display:flex;gap:10px;'><a href='/new-migration/assessment' class='btn btn-primary'>Continue to assessment</a><a href='/new-migration' class='btn btn-outline'>Back</a></div></div>"
         Write-PodeHtmlResponse -Value (Get-IISPivotHtml -Title "New Migration" -Body $body -Authenticated $true)
     }
     # New Migration Step 3 - Assessment
@@ -249,7 +250,7 @@ Start-PodeServer -Threads 2 {
         if (-not $WebEvent.Session.Data.Authenticated) { Move-PodeResponseUrl -Url "/login"; return }
         $nm = $WebEvent.Session.Data.NewMigration
         if (-not $nm) { Move-PodeResponseUrl -Url "/new-migration"; return }
-        New-MigrationRecord -ClientName $nm.clientName -SourceServer $nm.sourceServer -TargetServer $nm.targetServer
+        New-MigrationRecord -MigrationName $nm.migrationName -ClientName $nm.clientName -SourceServer $nm.sourceServer -TargetServer $nm.targetServer
         $WebEvent.Session.Data.NewMigration = $null
         Move-PodeResponseUrl -Url "/dashboard"
     }
@@ -258,3 +259,13 @@ Start-PodeServer -Threads 2 {
     Write-Host "  https://localhost:47821" -ForegroundColor Cyan
     Write-Host "  https://192.168.29.69:47821" -ForegroundColor Cyan
 }
+
+
+
+
+
+
+
+
+
+
